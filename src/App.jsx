@@ -14,6 +14,14 @@ import {
   ChevronLeft,
   ChevronRight,
   AlertCircle,
+  LogOut,
+  Loader2,
+  Lock,
+  ImagePlus,
+  Globe,
+  EyeOff,
+  ArrowUp,
+  ArrowDown,
 } from "lucide-react";
 import {
   BarChart,
@@ -105,6 +113,15 @@ const TYPE_OPTIONS = [
 
 const SIZE_OPTIONS = ["XS", "S", "M", "L", "XL", "XXL", "Único"];
 
+// Debe coincidir exactamente con el constraint "garments_audience_check" de la
+// base de datos (ver supabase/migracion-1-columnas-y-fotos.sql) y con las
+// opciones de filtro del landing. Si se agrega un valor aquí hay que agregarlo
+// también allá.
+const AUDIENCE_OPTIONS = ["Unisex", "Damas", "Caballeros", "Niños"];
+
+const GARMENT_IMAGES_BUCKET = "garment-images";
+const MAX_IMAGE_MB = 5;
+
 const PERIODS = [
   { value: "dia", label: "Día" },
   { value: "semana", label: "Semana" },
@@ -140,10 +157,13 @@ function garmentFromDb(row) {
     id: row.id,
     name: row.name,
     type: row.type,
+    audience: row.audience || "Unisex",
     price: Number(row.price),
     cost: Number(row.cost),
     units: row.units,
     sizes: row.sizes || [],
+    images: row.images || [],
+    isPublished: !!row.is_published,
     createdAt: row.created_at,
   };
 }
@@ -151,10 +171,13 @@ function garmentToDb(g) {
   return {
     name: g.name,
     type: g.type,
+    audience: g.audience || "Unisex",
     price: g.price,
     cost: g.cost,
     units: g.units,
     sizes: g.sizes || [],
+    images: g.images || [],
+    is_published: !!g.isPublished,
   };
 }
 function saleFromDb(row) {
@@ -180,6 +203,27 @@ function saleToDb(s) {
     unit_cost: s.unitCost,
     sale_date: s.date,
   };
+}
+
+/* --- Subida de fotos a Supabase Storage (bucket "garment-images") ---
+   Requiere que ya se haya corrido supabase/migracion-1-columnas-y-fotos.sql
+   (crea el bucket y sus políticas: solo usuarios con sesión pueden subir). */
+async function uploadGarmentImage(file) {
+  if (!file.type.startsWith("image/")) {
+    throw new Error(`"${file.name}" no es una imagen.`);
+  }
+  if (file.size > MAX_IMAGE_MB * 1024 * 1024) {
+    throw new Error(`"${file.name}" pesa más de ${MAX_IMAGE_MB}MB.`);
+  }
+  const ext = (file.name.split(".").pop() || "jpg").toLowerCase().replace(/[^a-z0-9]/g, "") || "jpg";
+  const path = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}.${ext}`;
+  const { error } = await supabase.storage.from(GARMENT_IMAGES_BUCKET).upload(path, file, {
+    cacheControl: "3600",
+    upsert: false,
+  });
+  if (error) throw error;
+  const { data } = supabase.storage.from(GARMENT_IMAGES_BUCKET).getPublicUrl(path);
+  return data.publicUrl;
 }
 
 function parseDateLocal(dateStr) {
@@ -326,7 +370,146 @@ function EmptyState({ text }) {
   );
 }
 
-function Header() {
+/* ---------------------------------------------------------------- */
+/* Inicio de sesión                                                   */
+/* ---------------------------------------------------------------- */
+function LoginScreen() {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [mode, setMode] = useState("login"); // "login" | "reset" | "reset-sent"
+
+  async function handleLogin(e) {
+    e.preventDefault();
+    setError("");
+    if (!email.trim() || !password) {
+      setError("Escribe tu correo y tu contraseña.");
+      return;
+    }
+    setLoading(true);
+    const { error: authError } = await supabase.auth.signInWithPassword({
+      email: email.trim(),
+      password,
+    });
+    setLoading(false);
+    if (authError) {
+      setError("Correo o contraseña incorrectos.");
+    }
+  }
+
+  async function handleResetRequest(e) {
+    e.preventDefault();
+    setError("");
+    if (!email.trim()) {
+      setError("Escribe tu correo primero.");
+      return;
+    }
+    setLoading(true);
+    const { error: resetError } = await supabase.auth.resetPasswordForEmail(email.trim());
+    setLoading(false);
+    if (resetError) {
+      setError("No se pudo enviar el correo. Revisa que esté bien escrito.");
+    } else {
+      setMode("reset-sent");
+    }
+  }
+
+  return (
+    <div
+      style={{ minHeight: "100dvh", background: COLORS.bg, fontFamily: "'Inter', sans-serif", color: COLORS.ink }}
+      className="w-full flex flex-col items-center justify-center px-6"
+    >
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&display=swap');
+        input:focus, button:focus { outline: 2px solid ${COLORS.accent}; outline-offset: 1px; }
+      `}</style>
+      <div className="w-full max-w-sm">
+        <div className="flex flex-col items-center mb-6">
+          <div style={{ marginBottom: 10 }}><TagLogo /></div>
+          <h1 style={{ fontFamily: "'Fraunces', serif", fontSize: 22, fontWeight: 700, margin: 0 }}>
+            Inventario
+          </h1>
+          <p style={{ fontSize: 12, color: COLORS.inkSoft, margin: "2px 0 0", display: "flex", alignItems: "center", gap: 4 }}>
+            <Lock size={11} /> Acceso solo para la tienda
+          </p>
+        </div>
+
+        {mode === "reset-sent" ? (
+          <div
+            className="text-center text-sm p-4 rounded-xl"
+            style={{ background: COLORS.accentSoft, color: COLORS.accent, border: `1px solid ${COLORS.accent}` }}
+          >
+            Te enviamos un correo a <strong>{email}</strong> con un link para crear una contraseña nueva.
+            <button
+              type="button"
+              onClick={() => setMode("login")}
+              className="block mx-auto mt-3 text-xs font-semibold underline"
+              style={{ color: COLORS.accent, background: "none", border: "none" }}
+            >
+              Volver a iniciar sesión
+            </button>
+          </div>
+        ) : (
+          <form onSubmit={mode === "reset" ? handleResetRequest : handleLogin} noValidate>
+            <Field label="Correo">
+              <input
+                type="email"
+                autoComplete="username"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="tu@correo.com"
+                style={inputStyle}
+              />
+            </Field>
+            {mode === "login" && (
+              <Field label="Contraseña">
+                <input
+                  type="password"
+                  autoComplete="current-password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••••••"
+                  style={inputStyle}
+                />
+              </Field>
+            )}
+
+            {error && (
+              <div
+                className="flex items-center gap-2 text-sm mt-1 mb-2 p-2.5 rounded-lg"
+                style={{ color: COLORS.danger, background: "#FBEAE5", border: `1px solid ${COLORS.danger}` }}
+              >
+                <AlertCircle size={16} style={{ flexShrink: 0 }} /> {error}
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={loading}
+              style={{ background: COLORS.accent, border: "none", opacity: loading ? 0.7 : 1 }}
+              className="w-full text-white font-semibold py-3 rounded-xl flex items-center justify-center gap-2 mt-2"
+            >
+              {loading && <Loader2 size={16} className="animate-spin" />}
+              {mode === "reset" ? "Enviar link de recuperación" : "Entrar"}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => { setError(""); setMode(mode === "reset" ? "login" : "reset"); }}
+              className="block mx-auto mt-4 text-xs font-medium underline"
+              style={{ color: COLORS.inkSoft, background: "none", border: "none" }}
+            >
+              {mode === "reset" ? "Volver a iniciar sesión" : "¿Olvidaste tu contraseña?"}
+            </button>
+          </form>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Header({ onSignOut }) {
   return (
     <header
       className="w-full flex items-center gap-2 px-4 pt-4 pb-3"
@@ -339,12 +522,15 @@ function Header() {
       }}
     >
       <TagLogo />
-      <div>
+      <div className="flex-1">
         <h1 style={{ fontFamily: "'Fraunces', serif", fontSize: 19, fontWeight: 700, lineHeight: 1.1, margin: 0 }}>
           Inventario
         </h1>
         <p style={{ fontSize: 11, color: COLORS.inkSoft, margin: 0 }}>Gestión de tienda</p>
       </div>
+      <button onClick={onSignOut} title="Cerrar sesión" style={{ ...iconBtnStyle, color: COLORS.inkSoft }}>
+        <LogOut size={16} />
+      </button>
     </header>
   );
 }
@@ -441,6 +627,10 @@ function AddGarmentForm({ onSubmit, editing, onCancelEdit, typeOptions }) {
   const [type, setType] = useState("");
   const [units, setUnits] = useState("");
   const [sizes, setSizes] = useState([]);
+  const [audience, setAudience] = useState("Unisex");
+  const [isPublished, setIsPublished] = useState(false);
+  const [images, setImages] = useState([]);
+  const [uploading, setUploading] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -451,6 +641,9 @@ function AddGarmentForm({ onSubmit, editing, onCancelEdit, typeOptions }) {
       setType(editing.type || "");
       setUnits(String(editing.units ?? ""));
       setSizes(editing.sizes || []);
+      setAudience(editing.audience || "Unisex");
+      setIsPublished(!!editing.isPublished);
+      setImages(editing.images || []);
       setError("");
     } else {
       resetForm();
@@ -464,11 +657,45 @@ function AddGarmentForm({ onSubmit, editing, onCancelEdit, typeOptions }) {
     setType("");
     setUnits("");
     setSizes([]);
+    setAudience("Unisex");
+    setIsPublished(false);
+    setImages([]);
     setError("");
   }
 
   function toggleSize(s) {
     setSizes((prev) => (prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s]));
+  }
+
+  async function handleFilesSelected(e) {
+    const files = Array.from(e.target.files || []);
+    e.target.value = ""; // permite volver a elegir el mismo archivo después
+    if (files.length === 0) return;
+    setUploading(true);
+    setError("");
+    try {
+      for (const file of files) {
+        const url = await uploadGarmentImage(file);
+        setImages((prev) => [...prev, url]);
+      }
+    } catch (err) {
+      setError(err.message || "No se pudo subir una de las fotos.");
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  function removeImage(idx) {
+    setImages((prev) => prev.filter((_, i) => i !== idx));
+  }
+  function moveImage(idx, dir) {
+    setImages((prev) => {
+      const next = [...prev];
+      const target = idx + dir;
+      if (target < 0 || target >= next.length) return next;
+      [next[idx], next[target]] = [next[target], next[idx]];
+      return next;
+    });
   }
 
   function handleSubmit(e) {
@@ -484,8 +711,19 @@ function AddGarmentForm({ onSubmit, editing, onCancelEdit, typeOptions }) {
       if (!Number.isFinite(priceNum) || priceNum < 0) { setError("El precio no es válido."); return; }
       if (!Number.isFinite(costNum) || costNum < 0) { setError("El costo de compra no es válido."); return; }
       if (!Number.isFinite(unitsNum) || unitsNum < 0) { setError("Las unidades disponibles no son válidas."); return; }
+      if (uploading) { setError("Espera a que terminen de subir las fotos."); return; }
       setError("");
-      onSubmit({ name: name.trim(), type: type.trim(), price: priceNum, cost: costNum, units: unitsNum, sizes });
+      onSubmit({
+        name: name.trim(),
+        type: type.trim(),
+        audience,
+        price: priceNum,
+        cost: costNum,
+        units: unitsNum,
+        sizes,
+        images,
+        isPublished,
+      });
       resetForm();
     } catch (err) {
       setError("Ocurrió un error inesperado al guardar. Inténtalo de nuevo.");
@@ -528,19 +766,26 @@ function AddGarmentForm({ onSubmit, editing, onCancelEdit, typeOptions }) {
         </Field>
       </div>
 
-      <Field label="Tipo de prenda">
-        <input
-          list="type-options"
-          value={type}
-          onChange={(e) => setType(e.target.value)}
-          placeholder="Ej. Camisetas"
-          required
-          style={inputStyle}
-        />
-        <datalist id="type-options">
-          {typeOptions.map((t) => <option key={t} value={t} />)}
-        </datalist>
-      </Field>
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Tipo de prenda">
+          <input
+            list="type-options"
+            value={type}
+            onChange={(e) => setType(e.target.value)}
+            placeholder="Ej. Camisetas"
+            required
+            style={inputStyle}
+          />
+          <datalist id="type-options">
+            {typeOptions.map((t) => <option key={t} value={t} />)}
+          </datalist>
+        </Field>
+        <Field label="Público" hint="Filtro del catálogo online.">
+          <select value={audience} onChange={(e) => setAudience(e.target.value)} style={inputStyle}>
+            {AUDIENCE_OPTIONS.map((a) => <option key={a} value={a}>{a}</option>)}
+          </select>
+        </Field>
+      </div>
 
       <Field label="Unidades disponibles" hint="Opcional, se usa 0 si lo dejas en blanco.">
         <input
@@ -572,6 +817,90 @@ function AddGarmentForm({ onSubmit, editing, onCancelEdit, typeOptions }) {
           })}
         </div>
       </Field>
+
+      <Field label="Fotos de la prenda" hint={`Hasta ${MAX_IMAGE_MB}MB cada una. La primera foto es la portada en la tienda online.`}>
+        <div className="flex flex-col gap-2">
+          {images.length > 0 && (
+            <div className="flex flex-col gap-2">
+              {images.map((url, idx) => (
+                <div
+                  key={url + idx}
+                  className="flex items-center gap-2 p-1.5 rounded-lg"
+                  style={{ border: `1px solid ${COLORS.border}` }}
+                >
+                  <img
+                    src={url}
+                    alt={`Foto ${idx + 1}`}
+                    style={{ width: 44, height: 44, objectFit: "cover", borderRadius: 6, flexShrink: 0 }}
+                  />
+                  <span className="text-xs flex-1" style={{ color: COLORS.inkSoft }}>
+                    {idx === 0 ? "Portada" : `Foto ${idx + 1}`}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => moveImage(idx, -1)}
+                    disabled={idx === 0}
+                    style={{ ...iconBtnStyle, opacity: idx === 0 ? 0.3 : 1 }}
+                  >
+                    <ArrowUp size={13} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => moveImage(idx, 1)}
+                    disabled={idx === images.length - 1}
+                    style={{ ...iconBtnStyle, opacity: idx === images.length - 1 ? 0.3 : 1 }}
+                  >
+                    <ArrowDown size={13} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => removeImage(idx)}
+                    style={{ ...iconBtnStyle, color: COLORS.danger }}
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          <label
+            className="flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-medium cursor-pointer"
+            style={{ border: `1.5px dashed ${COLORS.border}`, color: COLORS.accent, background: COLORS.accentSoft }}
+          >
+            {uploading ? <Loader2 size={16} className="animate-spin" /> : <ImagePlus size={16} />}
+            {uploading ? "Subiendo…" : "Añadir foto"}
+            <input
+              type="file"
+              accept="image/*"
+              multiple
+              onChange={handleFilesSelected}
+              disabled={uploading}
+              style={{ display: "none" }}
+            />
+          </label>
+        </div>
+      </Field>
+
+      <label
+        className="flex items-center justify-between gap-3 p-3 rounded-xl mb-3 cursor-pointer"
+        style={{ border: `1.5px solid ${isPublished ? COLORS.accent : COLORS.border}`, background: isPublished ? COLORS.accentSoft : "#fff" }}
+      >
+        <span className="flex items-center gap-2 text-sm font-medium">
+          {isPublished ? <Globe size={16} style={{ color: COLORS.accent }} /> : <EyeOff size={16} style={{ color: COLORS.inkSoft }} />}
+          <span>
+            Publicar en la tienda online
+            <span className="block text-xs font-normal" style={{ color: COLORS.inkSoft }}>
+              {isPublished ? "Visible en el landing (precio y fotos, nunca el costo)." : "Solo visible aquí, en el inventario."}
+            </span>
+          </span>
+        </span>
+        <input
+          type="checkbox"
+          checked={isPublished}
+          onChange={(e) => setIsPublished(e.target.checked)}
+          style={{ width: 20, height: 20, accentColor: COLORS.accent, flexShrink: 0 }}
+        />
+      </label>
 
       {error && (
         <div
@@ -649,22 +978,47 @@ function InventoryTab({ garments, onEdit, onDelete }) {
         <EmptyState text="No hay prendas que coincidan con tu búsqueda." />
       ) : (
         <div className="overflow-x-auto rounded-xl" style={{ border: `1px solid ${COLORS.border}` }}>
-          <table className="w-full text-sm" style={{ borderCollapse: "collapse", minWidth: "580px" }}>
+          <table className="w-full text-sm" style={{ borderCollapse: "collapse", minWidth: "680px" }}>
             <thead>
               <tr style={{ background: COLORS.accentSoft }}>
+                <th style={thStyle}></th>
                 <th style={thStyle}>Prenda</th>
                 <th style={thStyle}>Tipo</th>
                 <th style={thStyle}>Tallas</th>
                 <th style={thStyle}>Precio</th>
                 <th style={thStyle}>Costo</th>
                 <th style={thStyle}>Stock</th>
+                <th style={thStyle}>Tienda</th>
                 <th style={thStyle}></th>
               </tr>
             </thead>
             <tbody>
               {filtered.map((g) => (
                 <tr key={g.id} style={{ borderTop: `1px solid ${COLORS.border}` }}>
-                  <td style={{ ...tdStyle, fontWeight: 500 }}>{g.name}</td>
+                  <td style={tdStyle}>
+                    {g.images && g.images[0] ? (
+                      <img
+                        src={g.images[0]}
+                        alt=""
+                        style={{ width: 32, height: 32, objectFit: "cover", borderRadius: 6 }}
+                      />
+                    ) : (
+                      <div
+                        style={{
+                          width: 32, height: 32, borderRadius: 6,
+                          border: `1px dashed ${COLORS.border}`,
+                          display: "flex", alignItems: "center", justifyContent: "center",
+                          color: COLORS.inkSoft,
+                        }}
+                      >
+                        <ImagePlus size={13} />
+                      </div>
+                    )}
+                  </td>
+                  <td style={{ ...tdStyle, fontWeight: 500 }}>
+                    {g.name}
+                    <span className="block text-xs font-normal" style={{ color: COLORS.inkSoft }}>{g.audience}</span>
+                  </td>
                   <td style={tdStyle}><span style={typeBadgeStyle}>{g.type}</span></td>
                   <td style={tdStyle}>{g.sizes && g.sizes.length ? g.sizes.join(", ") : "—"}</td>
                   <td style={{ ...tdStyle, color: COLORS.gold, fontWeight: 600 }}>{formatEUR(g.price)}</td>
@@ -678,6 +1032,17 @@ function InventoryTab({ garments, onEdit, onDelete }) {
                     >
                       {g.units}
                     </span>
+                  </td>
+                  <td style={tdStyle}>
+                    {g.isPublished ? (
+                      <span className="inline-flex items-center gap-1 text-xs font-semibold" style={{ color: COLORS.accent }}>
+                        <Globe size={13} /> Publicada
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 text-xs" style={{ color: COLORS.inkSoft }}>
+                        <EyeOff size={13} /> Oculta
+                      </span>
+                    )}
                   </td>
                   <td style={tdStyle}>
                     <div className="flex gap-1">
@@ -1106,6 +1471,7 @@ function DashboardTab({ sales, garments }) {
 /* App principal                                                      */
 /* ---------------------------------------------------------------- */
 export default function App() {
+  const [session, setSession] = useState(undefined); // undefined = aún no se sabe, null = sin sesión
   const [tab, setTab] = useState("inventario");
   const [garments, setGarments] = useState([]);
   const [sales, setSales] = useState([]);
@@ -1118,6 +1484,16 @@ export default function App() {
     setToast({ message, type: type || "success" });
     setTimeout(() => setToast(null), 2600);
   }
+
+  // Sesión de Supabase Auth: se comprueba al cargar y se escuchan los cambios
+  // (login, logout, token renovado) para mantener la app sincronizada.
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => setSession(data.session));
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, newSession) => {
+      setSession(newSession);
+    });
+    return () => listener.subscription.unsubscribe();
+  }, []);
 
   const reloadGarments = useCallback(async () => {
     const { data, error } = await supabase
@@ -1139,6 +1515,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (!session) return undefined;
     let mounted = true;
 
     (async () => {
@@ -1161,7 +1538,11 @@ export default function App() {
       mounted = false;
       supabase.removeChannel(channel);
     };
-  }, [reloadGarments, reloadSales]);
+  }, [session, reloadGarments, reloadSales]);
+
+  async function handleSignOut() {
+    await supabase.auth.signOut();
+  }
 
   async function handleSaveGarment(data) {
     try {
@@ -1259,6 +1640,26 @@ export default function App() {
     return Array.from(set);
   }, [garments]);
 
+  // Mientras no se sabe si hay sesión (primer chequeo de Supabase Auth), se
+  // muestra una pantalla neutra en vez de parpadear al login o al inventario.
+  if (session === undefined) {
+    return (
+      <div
+        style={{
+          minHeight: "100dvh", background: COLORS.bg, color: COLORS.inkSoft,
+          display: "flex", alignItems: "center", justifyContent: "center",
+          fontFamily: "'Inter', sans-serif", fontSize: 14,
+        }}
+      >
+        <Loader2 size={18} className="animate-spin" style={{ marginRight: 8 }} /> Comprobando sesión…
+      </div>
+    );
+  }
+
+  if (!session) {
+    return <LoginScreen />;
+  }
+
   if (loading) {
     return (
       <div
@@ -1288,7 +1689,7 @@ export default function App() {
         input:focus, button:focus { outline: 2px solid ${COLORS.accent}; outline-offset: 1px; }
       `}</style>
       <div className="w-full max-w-md" style={{ minHeight: "100dvh", position: "relative" }}>
-        <Header />
+        <Header onSignOut={handleSignOut} />
         <main className="px-4 pt-4" style={{ paddingBottom: "104px" }}>
           {/* Los 4 paneles permanecen montados siempre; solo se oculta/muestra con CSS.
               Así ninguno pierde su estado (texto escrito, búsquedas, filtros) al cambiar de pestaña. */}
