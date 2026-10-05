@@ -111,7 +111,9 @@ const TYPE_OPTIONS = [
   "Otro",
 ];
 
-const SIZE_OPTIONS = ["XS", "S", "M", "L", "XL", "XXL", "Único"];
+const CLOTHING_SIZE_OPTIONS = ["XS", "S", "M", "L", "XL", "XXL", "Único"];
+// Tallas numéricas de cintura, para cuando el tipo de prenda es "Pantalones".
+const PANTS_SIZE_OPTIONS = ["26", "28", "30", "32", "34", "36", "38", "40", "42"];
 
 // Debe coincidir exactamente con el constraint "garments_audience_check" de la
 // base de datos (ver supabase/migracion-1-columnas-y-fotos.sql) y con las
@@ -524,9 +526,9 @@ function Header({ onSignOut }) {
       <TagLogo />
       <div className="flex-1">
         <h1 style={{ fontFamily: "'Fraunces', serif", fontSize: 19, fontWeight: 700, lineHeight: 1.1, margin: 0 }}>
-          Inventario
+          Marianela Shop
         </h1>
-        <p style={{ fontSize: 11, color: COLORS.inkSoft, margin: 0 }}>Gestión de tienda</p>
+        <p style={{ fontSize: 11, color: COLORS.inkSoft, margin: 0 }}>Gestión de inventario</p>
       </div>
       <button onClick={onSignOut} title="Cerrar sesión" style={{ ...iconBtnStyle, color: COLORS.inkSoft }}>
         <LogOut size={16} />
@@ -667,6 +669,16 @@ function AddGarmentForm({ onSubmit, editing, onCancelEdit, typeOptions }) {
     setSizes((prev) => (prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s]));
   }
 
+  const isPants = type.trim().toLowerCase() === "pantalones";
+  const sizeOptions = isPants ? PANTS_SIZE_OPTIONS : CLOTHING_SIZE_OPTIONS;
+
+  // Si cambiamos de categoría, descartamos tallas seleccionadas que ya no apliquen
+  // (p. ej. "M" seleccionado y luego se cambia el tipo a "Pantalones").
+  useEffect(() => {
+    setSizes((prev) => prev.filter((s) => sizeOptions.includes(s)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isPants]);
+
   async function handleFilesSelected(e) {
     const files = Array.from(e.target.files || []);
     e.target.value = ""; // permite volver a elegir el mismo archivo después
@@ -795,9 +807,9 @@ function AddGarmentForm({ onSubmit, editing, onCancelEdit, typeOptions }) {
         />
       </Field>
 
-      <Field label="Tallas disponibles">
+      <Field label={isPants ? "Tallas disponibles (cintura)" : "Tallas disponibles"}>
         <div className="flex flex-wrap gap-2 mt-1">
-          {SIZE_OPTIONS.map((s) => {
+          {sizeOptions.map((s) => {
             const active = sizes.includes(s);
             return (
               <button
