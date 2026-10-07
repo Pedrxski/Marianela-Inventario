@@ -714,6 +714,7 @@ function AddGarmentForm({ onSubmit, editing, onCancelEdit, typeOptions }) {
   const [images, setImages] = useState([]);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState("");
+  const [addingType, setAddingType] = useState(false);
 
   useEffect(() => {
     if (editing) {
@@ -727,6 +728,7 @@ function AddGarmentForm({ onSubmit, editing, onCancelEdit, typeOptions }) {
       setIsPublished(!!editing.isPublished);
       setImages(editing.images || []);
       setError("");
+      setAddingType(editing.type ? !typeOptions.includes(editing.type) : false);
     } else {
       resetForm();
     }
@@ -743,6 +745,17 @@ function AddGarmentForm({ onSubmit, editing, onCancelEdit, typeOptions }) {
     setIsPublished(false);
     setImages([]);
     setError("");
+    setAddingType(false);
+  }
+
+  function handleTypeSelectChange(value) {
+    if (value === "__new__") {
+      setAddingType(true);
+      setType("");
+    } else {
+      setAddingType(false);
+      setType(value);
+    }
   }
 
   function toggleSize(s) {
@@ -860,17 +873,37 @@ function AddGarmentForm({ onSubmit, editing, onCancelEdit, typeOptions }) {
 
       <div className="grid grid-cols-2 gap-3">
         <Field label="Tipo de prenda">
-          <input
-            list="type-options"
-            value={type}
-            onChange={(e) => setType(e.target.value)}
-            placeholder="Ej. Camisetas"
-            required
-            style={inputStyle}
-          />
-          <datalist id="type-options">
-            {typeOptions.map((t) => <option key={t} value={t} />)}
-          </datalist>
+          {addingType ? (
+            <>
+              <input
+                value={type}
+                onChange={(e) => setType(e.target.value)}
+                placeholder="Escribe la categoría nueva"
+                required
+                autoFocus
+                style={inputStyle}
+              />
+              <button
+                type="button"
+                onClick={() => handleTypeSelectChange(typeOptions[0] || "")}
+                className="text-xs font-medium mt-1"
+                style={{ color: COLORS.accent, background: "none", border: "none", padding: 0, cursor: "pointer" }}
+              >
+                Elegir de la lista en vez de crear una nueva
+              </button>
+            </>
+          ) : (
+            <select
+              value={typeOptions.includes(type) ? type : ""}
+              onChange={(e) => handleTypeSelectChange(e.target.value)}
+              required
+              style={inputStyle}
+            >
+              <option value="" disabled>Selecciona una categoría…</option>
+              {typeOptions.map((t) => <option key={t} value={t}>{t}</option>)}
+              <option value="__new__">+ Agregar categoría nueva…</option>
+            </select>
+          )}
         </Field>
         <Field label="Público" hint="Filtro del catálogo online.">
           <select value={audience} onChange={(e) => setAudience(e.target.value)} style={inputStyle}>
