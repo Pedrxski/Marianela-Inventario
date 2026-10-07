@@ -114,6 +114,8 @@ const TYPE_OPTIONS = [
 const CLOTHING_SIZE_OPTIONS = ["XS", "S", "M", "L", "XL", "XXL", "Único"];
 // Tallas numéricas de cintura, para cuando el tipo de prenda es "Pantalones".
 const PANTS_SIZE_OPTIONS = ["26", "28", "30", "32", "34", "36", "38", "40", "42"];
+// Tallas de dama para pantalones (público "Damas"): de 0 a 16, de 2 en 2.
+const WOMENS_PANTS_SIZE_OPTIONS = ["0", "2", "4", "6", "8", "10", "12", "14", "16"];
 
 // Debe coincidir exactamente con el constraint "garments_audience_check" de la
 // base de datos (ver supabase/migracion-1-columnas-y-fotos.sql) y con las
@@ -763,14 +765,20 @@ function AddGarmentForm({ onSubmit, editing, onCancelEdit, typeOptions }) {
   }
 
   const isPants = type.trim().toLowerCase() === "pantalones";
-  const sizeOptions = isPants ? PANTS_SIZE_OPTIONS : CLOTHING_SIZE_OPTIONS;
+  const isWomensPants = isPants && audience === "Damas";
+  const sizeOptions = isWomensPants
+    ? WOMENS_PANTS_SIZE_OPTIONS
+    : isPants
+    ? PANTS_SIZE_OPTIONS
+    : CLOTHING_SIZE_OPTIONS;
 
-  // Si cambiamos de categoría, descartamos tallas seleccionadas que ya no apliquen
-  // (p. ej. "M" seleccionado y luego se cambia el tipo a "Pantalones").
+  // Si cambiamos de categoría o de público, descartamos tallas seleccionadas que
+  // ya no apliquen (p. ej. "M" seleccionado y luego se cambia el tipo a "Pantalones",
+  // o un pantalón de "Damas" con tallas de cintura al cambiar el público).
   useEffect(() => {
     setSizes((prev) => prev.filter((s) => sizeOptions.includes(s)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isPants]);
+  }, [isPants, isWomensPants]);
 
   async function handleFilesSelected(e) {
     const files = Array.from(e.target.files || []);
@@ -920,7 +928,7 @@ function AddGarmentForm({ onSubmit, editing, onCancelEdit, typeOptions }) {
         />
       </Field>
 
-      <Field label={isPants ? "Tallas disponibles (cintura)" : "Tallas disponibles"}>
+      <Field label={isWomensPants ? "Tallas disponibles (dama)" : isPants ? "Tallas disponibles (cintura)" : "Tallas disponibles"}>
         <div className="flex flex-wrap gap-2 mt-1">
           {sizeOptions.map((s) => {
             const active = sizes.includes(s);
