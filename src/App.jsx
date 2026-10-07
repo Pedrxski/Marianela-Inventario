@@ -207,21 +207,101 @@ function saleToDb(s) {
   };
 }
 
+const IMAGE_FILENAME_RE = /\.(jpe?g|png|webp|heic|heif|gif|bmp|tiff?)$/i;
+
+/* Redimensiona y recomprime una imagen en el propio navegador antes de subirla.
+   Los iPhone guardan las fotos en HEIC; al elegirlas en un <input type="file">
+   el navegador las convierte a JPEG "al vuelo", y ese JPEG suele pesar bastante
+   más que el HEIC original (a veces supera los 5MB aunque la foto original no
+   llegaba a esa cifra). Pasarlas por un canvas resuelve ese salto de peso y de
+   paso ahorra almacenamiento y ancho de banda. */
+async function compressImageFile(file, { maxDim = 1600, quality = 0.82 } = {}) {
+  let drawSource;
+  let width;
+  let height;
+
+  if (typeof createImageBitmap === "function") {
+    try {
+      const bitmap = await createImageBitmap(file);
+      drawSource = bitmap;
+      width = bitmap.width;
+      height = bitmap.height;
+    } catch {
+      drawSource = null;
+    }
+  }
+
+  if (!drawSource) {
+    const dataUrl = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(new Error("No se pudo leer el archivo."));
+      reader.readAsDataURL(file);
+    });
+    const img = await new Promise((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = () => reject(new Error("No se pudo procesar la imagen."));
+      image.src = dataUrl;
+    });
+    drawSource = img;
+    width = img.naturalWidth;
+    height = img.naturalHeight;
+  }
+
+  const scale = Math.min(1, maxDim / Math.max(width, height));
+  const targetW = Math.max(1, Math.round(width * scale));
+  const targetH = Math.max(1, Math.round(height * scale));
+
+  const canvas = document.createElement("canvas");
+  canvas.width = targetW;
+  canvas.height = targetH;
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(drawSource, 0, 0, targetW, targetH);
+  if (drawSource.close) drawSource.close(); // libera memoria si es un ImageBitmap
+
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", quality));
+  if (!blob) throw new Error(`No se pudo comprimir "${file.name}".`);
+
+  const baseName = file.name.replace(IMAGE_FILENAME_RE, "") || "foto";
+  return new File([blob], `${baseName}.jpg`, { type: "image/jpeg" });
+}
+
 /* --- Subida de fotos a Supabase Storage (bucket "garment-images") ---
    Requiere que ya se haya corrido supabase/migracion-1-columnas-y-fotos.sql
    (crea el bucket y sus políticas: solo usuarios con sesión pueden subir). */
 async function uploadGarmentImage(file) {
-  if (!file.type.startsWith("image/")) {
+  const looksLikeImage = file.type.startsWith("image/") || (!file.type && IMAGE_FILENAME_RE.test(file.name));
+  if (!looksLikeImage) {
     throw new Error(`"${file.name}" no es una imagen.`);
   }
-  if (file.size > MAX_IMAGE_MB * 1024 * 1024) {
-    throw new Error(`"${file.name}" pesa más de ${MAX_IMAGE_MB}MB.`);
+
+  // Comprimimos siempre: normaliza cualquier formato (HEIC incluido) a JPEG,
+  // que es el formato que acepta el bucket, y evita el salto de peso del
+  // HEIC->JPEG automático del navegador.
+  let toUpload = file;
+  try {
+    toUpload = await compressImageFile(file);
+    if (toUpload.size > MAX_IMAGE_MB * 1024 * 1024) {
+      // Pasada extra, más agresiva, por si la foto es muy grande (p. ej. una panorámica).
+      toUpload = await compressImageFile(file, { maxDim: 1200, quality: 0.7 });
+    }
+  } catch {
+    // Si por lo que sea no se pudo comprimir (navegador sin soporte, etc.),
+    // seguimos con el archivo original y dejamos que la validación de abajo decida.
+    toUpload = file;
   }
-  const ext = (file.name.split(".").pop() || "jpg").toLowerCase().replace(/[^a-z0-9]/g, "") || "jpg";
+
+  if (toUpload.size > MAX_IMAGE_MB * 1024 * 1024) {
+    throw new Error(`"${file.name}" sigue pesando más de ${MAX_IMAGE_MB}MB incluso después de comprimirla.`);
+  }
+
+  const ext = (toUpload.name.split(".").pop() || "jpg").toLowerCase().replace(/[^a-z0-9]/g, "") || "jpg";
   const path = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}.${ext}`;
-  const { error } = await supabase.storage.from(GARMENT_IMAGES_BUCKET).upload(path, file, {
+  const { error } = await supabase.storage.from(GARMENT_IMAGES_BUCKET).upload(path, toUpload, {
     cacheControl: "3600",
     upsert: false,
+    contentType: toUpload.type || "image/jpeg",
   });
   if (error) throw error;
   const { data } = supabase.storage.from(GARMENT_IMAGES_BUCKET).getPublicUrl(path);
@@ -830,7 +910,7 @@ function AddGarmentForm({ onSubmit, editing, onCancelEdit, typeOptions }) {
         </div>
       </Field>
 
-      <Field label="Fotos de la prenda" hint={`Hasta ${MAX_IMAGE_MB}MB cada una. La primera foto es la portada en la tienda online.`}>
+      <Field label="Fotos de la prenda" hint="Se optimizan automáticamente al subirlas. La primera foto es la portada en la tienda online.">
         <div className="flex flex-col gap-2">
           {images.length > 0 && (
             <div className="flex flex-col gap-2">
